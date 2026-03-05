@@ -98,7 +98,7 @@ export default async function AdminPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {topDestinations.map((dest, i) => (
+              {topDestinations.map((dest: any, i: number) => (
                 <div key={dest.destination} className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="text-lg font-bold text-muted-foreground/50 w-6">
