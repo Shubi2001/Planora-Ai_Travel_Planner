@@ -1,0 +1,671 @@
+// ============================================================
+// AI TRAVEL PLANNER — PRISMA SCHEMA
+// SQL Server 2019 + Prisma ORM
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("DATABASE_URL")
+}
+
+// NOTE: SQL Server does not support native enums or Json types.
+// Enums are stored as String (nvarchar). See src/types/enums.ts for type-safe constants.
+// Json fields are stored as String @db.NVarChar(Max) and serialized/deserialized in app code.
+
+// ─────────────────────────────────────────
+// AUTH (NextAuth v5 required tables)
+// ─────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+  role          String    @default("USER")   // UserRole
+
+  accounts      Account[]
+  sessions      Session[]
+  trips         Trip[]
+  collaborations TripCollaborator[]
+  comments      Comment[]
+  organizations OrganizationMember[]
+
+  subscription  Subscription?
+  stripeCustomerId String? @unique
+
+  aiUsageCount  Int       @default(0)
+  aiUsageResetAt DateTime @default(now())
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([email])
+  @@index([stripeCustomerId])
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.NVarChar(Max)
+  access_token      String? @db.NVarChar(Max)
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.NVarChar(Max)
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─────────────────────────────────────────
+// ORGANIZATIONS
+// ─────────────────────────────────────────
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  logo        String?
+  description String?
+
+  members     OrganizationMember[]
+  trips       Trip[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([slug])
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           String   @default("VIEWER")  // CollaboratorRole
+  joinedAt       DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([userId, organizationId])
+  @@index([userId])
+  @@index([organizationId])
+  @@map("organization_members")
+}
+
+// ─────────────────────────────────────────
+// SUBSCRIPTIONS & BILLING
+// ─────────────────────────────────────────
+
+model Subscription {
+  id                   String   @id @default(cuid())
+  userId               String   @unique
+  stripeSubscriptionId String?  @unique
+  stripePriceId        String?
+  plan                 String   @default("FREE")    // SubscriptionPlan
+  status               String   @default("ACTIVE")  // SubscriptionStatus
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean  @default(false)
+  trialEnd             DateTime?
+
+  tripsLimit    Int @default(3)
+  aiCallsLimit  Int @default(10)
+  aiCallsUsed   Int @default(0)
+  aiCallsReset  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([stripeSubscriptionId])
+  @@map("subscriptions")
+}
+
+// ─────────────────────────────────────────
+// TRIPS
+// ─────────────────────────────────────────
+
+model Trip {
+  id             String  @id @default(cuid())
+  userId         String
+  organizationId String?
+
+  title          String
+  description    String?  @db.NVarChar(Max)
+  destination    String
+  country        String?
+  coverImage     String?
+  status         String   @default("DRAFT")  // TripStatus
+
+  startDate      DateTime
+  endDate        DateTime
+  travelStyle    String?
+  // JSON-serialized string array, e.g. '["food","history","nature"]'
+  interests      String   @default("[]") @db.NVarChar(Max)
+  groupSize      Int      @default(1)
+
+  totalBudget    Float?
+  currency       String   @default("USD")
+
+  latitude       Float?
+  longitude      Float?
+  timezone       String?
+
+  shareToken     String?  @unique
+  isPublic       Boolean  @default(false)
+  shareViewCount Int      @default(0)
+  voteCount      Int      @default(0)
+  coverImageQuery String?  // Unsplash search query for destination
+
+  generatedAt    DateTime?
+  aiModel        String?
+  aiPromptTokens Int?
+
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organization   Organization?       @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  days           TripDay[]
+  budget         Budget?
+  collaborators  TripCollaborator[]
+  comments       Comment[]
+  versions       TripVersion[]
+  weatherData    WeatherForecast[]
+  chatMessages   ChatMessage[]
+  packingItems   PackingItem[]
+  expenses       Expense[]
+  votes          TripVote[]
+  savedFlights   SavedFlight[]
+  savedHotels    SavedHotel[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([shareToken])
+  @@index([status])
+  @@index([startDate])
+  @@map("trips")
+}
+
+model TripDay {
+  id          String   @id @default(cuid())
+  tripId      String
+  dayNumber   Int
+  date        DateTime
+  title       String?
+  notes       String?  @db.NVarChar(Max)
+  sortOrder   Int      @default(0)
+
+  activities  Activity[]
+  trip        Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@unique([tripId, dayNumber])
+  @@index([tripId])
+  @@index([date])
+  @@map("trip_days")
+}
+
+model Activity {
+  id          String  @id @default(cuid())
+  dayId       String
+  category    String  @default("OTHER")  // ActivityCategory
+  timeSlot    String
+
+  title       String
+  description String? @db.NVarChar(Max)
+  location    String?
+  address     String?
+  duration    Int?
+  sortOrder   Int     @default(0)
+
+  latitude    Float?
+  longitude   Float?
+
+  estimatedCost Float?
+  currency      String? @default("USD")
+  isFree        Boolean @default(false)
+
+  placeId       String?
+  imageUrl      String?
+  websiteUrl    String?
+  phoneNumber   String?
+  rating        Float?
+
+  isAiGenerated Boolean @default(true)
+  notes         String? @db.NVarChar(Max)
+
+  day      TripDay  @relation(fields: [dayId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  // Activity → Comment: NoAction to avoid multi-path cascade through Trip
+  comments Comment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([dayId])
+  @@index([category])
+  @@index([timeSlot])
+  @@map("activities")
+}
+
+// ─────────────────────────────────────────
+// BUDGET
+// ─────────────────────────────────────────
+
+model Budget {
+  id       String @id @default(cuid())
+  tripId   String @unique
+  currency String @default("USD")
+  total    Float  @default(0)
+
+  food          Float @default(0)
+  transport     Float @default(0)
+  activities    Float @default(0)
+  accommodation Float @default(0)
+  shopping      Float @default(0)
+  miscellaneous Float @default(0)
+
+  isPerPerson Boolean @default(false)
+  groupSize   Int     @default(1)
+
+  trip      Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  items     BudgetItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId])
+  @@map("budgets")
+}
+
+model BudgetItem {
+  id       String  @id @default(cuid())
+  budgetId String
+  category String  // BudgetCategory
+  label    String
+  amount   Float
+  currency String  @default("USD")
+  date     DateTime?
+  isPaid   Boolean @default(false)
+  notes    String?
+
+  budget   Budget @relation(fields: [budgetId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([budgetId])
+  @@index([category])
+  @@map("budget_items")
+}
+
+// ─────────────────────────────────────────
+// COLLABORATION
+// ─────────────────────────────────────────
+
+model TripCollaborator {
+  id        String   @id @default(cuid())
+  tripId    String
+  userId    String
+  role      String   @default("VIEWER")  // CollaboratorRole
+  invitedBy String?
+  invitedAt DateTime @default(now())
+  acceptedAt DateTime?
+
+  inviteToken   String?   @unique
+  inviteEmail   String?
+  inviteExpires DateTime?
+
+  // Trip → TripCollaborator: Cascade (primary path)
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  // User → TripCollaborator: NoAction to avoid multi-path cascade (User→Trip→TripCollaborator)
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([tripId, userId])
+  @@index([tripId])
+  @@index([userId])
+  @@index([inviteToken])
+  @@map("trip_collaborators")
+}
+
+// ─────────────────────────────────────────
+// COMMENTS
+// ─────────────────────────────────────────
+
+model Comment {
+  id         String  @id @default(cuid())
+  tripId     String
+  userId     String
+  activityId String?
+  content    String  @db.NVarChar(Max)
+  isResolved Boolean @default(false)
+  parentId   String?
+
+  // Trip → Comment: Cascade (primary path)
+  trip     Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  // User → Comment: NoAction to avoid multi-path cascade (User→Trip→Comment)
+  user     User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  // Activity → Comment: NoAction to avoid multi-path cascade
+  activity Activity? @relation(fields: [activityId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  parent   Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  replies  Comment[] @relation("CommentReplies")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId])
+  @@index([userId])
+  @@index([activityId])
+  @@map("comments")
+}
+
+// ─────────────────────────────────────────
+// VERSION HISTORY
+// ─────────────────────────────────────────
+
+model TripVersion {
+  id         String  @id @default(cuid())
+  tripId     String
+  version    Int
+  // JSON-serialized trip snapshot
+  snapshot   String  @db.NVarChar(Max)
+  changedBy  String?
+  changeNote String?
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt DateTime @default(now())
+
+  @@index([tripId])
+  @@index([version])
+  @@map("trip_versions")
+}
+
+// ─────────────────────────────────────────
+// WEATHER
+// ─────────────────────────────────────────
+
+model WeatherForecast {
+  id          String   @id @default(cuid())
+  tripId      String
+  date        DateTime
+  location    String
+  latitude    Float?
+  longitude   Float?
+
+  tempMin     Float?
+  tempMax     Float?
+  description String?
+  icon        String?
+  humidity    Int?
+  windSpeed   Float?
+  rainProbability Int?
+  uvIndex     Int?
+
+  clothingSuggestion String? @db.NVarChar(Max)
+
+  fetchedAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([tripId, date])
+  @@index([tripId])
+  @@index([date])
+  @@map("weather_forecasts")
+}
+
+// ─────────────────────────────────────────
+// ADMIN / FEATURE FLAGS
+// ─────────────────────────────────────────
+
+model FeatureFlag {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       Boolean  @default(false)
+  description String?
+  rolloutPct  Int      @default(100)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("feature_flags")
+}
+
+model AiUsageLog {
+  id               String  @id @default(cuid())
+  userId           String
+  tripId           String?
+  action           String
+  model            String
+  promptTokens     Int     @default(0)
+  completionTokens Int     @default(0)
+  totalTokens      Int     @default(0)
+  durationMs       Int?
+  success          Boolean @default(true)
+  errorMessage     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([tripId])
+  @@index([createdAt])
+  @@map("ai_usage_logs")
+}
+
+// ─────────────────────────────────────────
+// AI CHAT (Conversational trip editing)
+// ─────────────────────────────────────────
+
+model ChatMessage {
+  id      String @id @default(cuid())
+  tripId  String
+  userId  String
+  role    String // "user" | "assistant" | "system"
+  content String @db.NVarChar(Max)
+  // JSON-serialized list of itinerary changes proposed by AI
+  proposedChanges String? @db.NVarChar(Max)
+  appliedAt       DateTime?
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt DateTime @default(now())
+
+  @@index([tripId])
+  @@index([userId])
+  @@map("chat_messages")
+}
+
+// ─────────────────────────────────────────
+// PACKING LIST
+// ─────────────────────────────────────────
+
+model PackingItem {
+  id       String  @id @default(cuid())
+  tripId   String
+  category String  @default("General") // Clothing, Documents, Toiletries, Electronics, etc.
+  name     String
+  quantity Int     @default(1)
+  isPacked Boolean @default(false)
+  isEssential Boolean @default(false)
+  notes    String?
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId])
+  @@map("packing_items")
+}
+
+// ─────────────────────────────────────────
+// ACTUAL EXPENSES (Budget vs Actual)
+// ─────────────────────────────────────────
+
+model Expense {
+  id          String   @id @default(cuid())
+  tripId      String
+  userId      String
+  category    String   // BudgetCategory values
+  title       String
+  amount      Float
+  currency    String   @default("USD")
+  date        DateTime @default(now())
+  receiptUrl  String?
+  notes       String?
+  isPaid      Boolean  @default(true)
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId])
+  @@index([category])
+  @@index([date])
+  @@map("expenses")
+}
+
+// ─────────────────────────────────────────
+// TRIP TEMPLATES
+// ─────────────────────────────────────────
+
+model TripTemplate {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String  @db.NVarChar(Max)
+  category    String  // "honeymoon" | "solo" | "luxury" | "family" | "roadtrip" | "adventure"
+  // JSON-serialized template structure (days, activities, suggestions)
+  structure   String  @db.NVarChar(Max)
+  coverImage  String?
+  durationDays Int    @default(7)
+  estimatedBudget Float?
+  currency    String  @default("USD")
+  tags        String  @default("[]") @db.NVarChar(Max)
+  isActive    Boolean @default(true)
+  useCount    Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+  @@index([category])
+  @@map("trip_templates")
+}
+
+// ─────────────────────────────────────────
+// TRIP VOTES (Social feature)
+// ─────────────────────────────────────────
+
+model TripVote {
+  id     String @id @default(cuid())
+  tripId String
+  userId String
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt DateTime @default(now())
+
+  @@unique([tripId, userId])
+  @@index([tripId])
+  @@map("trip_votes")
+}
+
+// ─────────────────────────────────────────
+// SAVED FLIGHTS / HOTELS
+// ─────────────────────────────────────────
+
+model SavedFlight {
+  id            String  @id @default(cuid())
+  tripId        String
+  userId        String
+  origin        String
+  destination   String
+  departureTime DateTime
+  arrivalTime   DateTime
+  airline       String?
+  flightNumber  String?
+  price         Float?
+  currency      String  @default("USD")
+  cabinClass    String  @default("ECONOMY")
+  bookingUrl    String?
+  // JSON-serialized raw flight offer data
+  rawData       String? @db.NVarChar(Max)
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt DateTime @default(now())
+
+  @@index([tripId])
+  @@map("saved_flights")
+}
+
+model SavedHotel {
+  id          String  @id @default(cuid())
+  tripId      String
+  userId      String
+  name        String
+  address     String?
+  latitude    Float?
+  longitude   Float?
+  checkIn     DateTime
+  checkOut    DateTime
+  pricePerNight Float?
+  currency    String  @default("USD")
+  rating      Float?
+  stars       Int?
+  bookingUrl  String?
+  imageUrl    String?
+  rawData     String? @db.NVarChar(Max)
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt DateTime @default(now())
+
+  @@index([tripId])
+  @@map("saved_hotels")
+}
+
