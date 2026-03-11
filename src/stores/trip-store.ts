@@ -13,6 +13,7 @@ export type TripWithDays = Trip & {
 interface TripState {
   trips: Trip[];
   currentTrip: TripWithDays | null;
+  weatherLoading: boolean;
   isGenerating: boolean;
   generatingProgress: string;
   generatingChunks: string;
@@ -24,6 +25,8 @@ interface TripActions {
   setTrips: (trips: Trip[]) => void;
   setCurrentTrip: (trip: TripWithDays | null) => void;
   updateTrip: (updates: Partial<Trip>) => void;
+  setWeatherData: (forecasts: WeatherForecast[]) => void;
+  setWeatherLoading: (loading: boolean) => void;
 
   // Optimistic activity reorder
   reorderActivities: (
@@ -57,6 +60,7 @@ export const useTripStore = create<TripState & TripActions>()(
       (set) => ({
         trips: [],
         currentTrip: null,
+        weatherLoading: false,
         isGenerating: false,
         generatingProgress: "",
         generatingChunks: "",
@@ -80,6 +84,19 @@ export const useTripStore = create<TripState & TripActions>()(
               Object.assign(state.currentTrip, updates);
               state.isDirty = true;
             }
+          }),
+
+        setWeatherData: (forecasts) =>
+          set((state) => {
+            if (state.currentTrip) {
+              state.currentTrip.weatherData = forecasts;
+            }
+            state.weatherLoading = false;
+          }),
+
+        setWeatherLoading: (loading) =>
+          set((state) => {
+            state.weatherLoading = loading;
           }),
 
         reorderActivities: (sourceDayId, destinationDayId, sourceIndex, destinationIndex) =>

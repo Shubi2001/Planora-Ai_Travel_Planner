@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { useTripStore } from "@/stores/trip-store";
 import { useUiStore } from "@/stores/ui-store";
+import { useWeatherFetch } from "@/hooks/use-weather-fetch";
 import { ItineraryBuilder } from "./itinerary-builder";
 import { TripHeader, type TripPanel } from "./trip-header";
 import { GeneratingOverlay } from "./generating-overlay";
@@ -52,13 +53,15 @@ interface TripEditorProps {
 const AUTO_SAVE_DELAY = 2000;
 
 export function TripEditor({ trip, shouldAutoGenerate, userId }: TripEditorProps) {
-  const { setCurrentTrip, isGenerating, isDirty, markSaved, currentTrip } = useTripStore();
+  const { setCurrentTrip, isGenerating, isDirty, markSaved, currentTrip, weatherLoading } = useTripStore();
   const { mapVisible } = useUiStore();
   const [activePanel, setActivePanel] = useState<TripPanel>("itinerary");
 
   useEffect(() => {
     setCurrentTrip(trip as Parameters<typeof setCurrentTrip>[0]);
   }, [trip, setCurrentTrip]);
+
+  useWeatherFetch(currentTrip);
 
   useEffect(() => {
     if (shouldAutoGenerate && trip.days.length === 0) handleGenerate();
@@ -190,8 +193,11 @@ export function TripEditor({ trip, shouldAutoGenerate, userId }: TripEditorProps
         {/* Left panel — full width on mobile, fixed 480px on desktop when map is visible */}
         <div className={cn("flex flex-col overflow-hidden", mapVisible ? "w-full md:w-[480px] md:shrink-0" : "flex-1")}>
           {/* Weather strip shown on itinerary tab only */}
-          {activePanel === "itinerary" && (currentTrip.weatherData?.length ?? 0) > 0 && (
-            <WeatherStrip forecasts={currentTrip.weatherData ?? []} />
+          {activePanel === "itinerary" && (
+            <WeatherStrip
+              forecasts={currentTrip.weatherData ?? []}
+              loading={weatherLoading}
+            />
           )}
 
           <AnimatePresence mode="wait">
@@ -236,7 +242,11 @@ export function TripEditor({ trip, shouldAutoGenerate, userId }: TripEditorProps
 
               {activePanel === "weather" && (
                 <div className="p-4">
-                  <WeatherStrip forecasts={currentTrip.weatherData ?? []} detailed />
+                  <WeatherStrip
+                    forecasts={currentTrip.weatherData ?? []}
+                    detailed
+                    loading={weatherLoading}
+                  />
                 </div>
               )}
 
